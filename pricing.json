@@ -1,0 +1,41 @@
+{
+  "_comment": "成本估算用的價目表（美元）。這是依 fal 公開資訊整理的『估計值』，不是帳單。fal 調價時請自行修改這個檔，App 下次啟動就會套用。",
+  "_updated": "2026-09-10",
+  "currency": "USD",
+  "image": {
+    "nano-banana-2": {
+      "unit": "per_image",
+      "base": 0.06,
+      "multipliers": {
+        "resolution": {"0.5K": 0.6, "1K": 1.0, "2K": 1.4, "4K": 2.6}
+      }
+    },
+    "gpt-image-2": {
+      "unit": "per_image",
+      "base": 0.08,
+      "multipliers": {
+        "quality": {"auto": 1.0, "low": 0.25, "medium": 0.6, "high": 1.0}
+      }
+    }
+  },
+  "video": {
+    "veo3.1": {
+      "unit": "per_second",
+      "base": 0.20,
+      "multipliers": {
+        "resolution": {"720p": 1.0, "1080p": 2.0, "4k": 3.0}
+      }
+    },
+    "seedance-2.5": {
+      "unit": "per_second",
+      "base": 0.24,
+      "multipliers": {
+        "resolution": {"480p": 0.55, "720p": 1.0, "1080p": 1.45},
+        "bitrate_mode": {"standard": 1.0, "high": 1.15}
+      }
+    }
+  },
+  "defaults": {
+    "video_seconds_when_auto": 5
+  }
+}
