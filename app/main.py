@@ -2,6 +2,8 @@
 """FAL Studio — 主視窗。"""
 
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QUrl, QTimer
@@ -35,6 +37,10 @@ class MainWindow(QWidget):
         self.models = config.load_models()
         self.pricing = config.load_pricing()
         self.out_dir = Path(self.settings.value("out_dir", str(config.OUT_DIR)))
+        # 舊版資料夾已更名，沿用舊設定的話改回新路徑
+        if self.out_dir == config.ROOT / "完成檔":
+            self.out_dir = config.OUT_DIR
+            self.settings.setValue("out_dir", str(self.out_dir))
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         self.mode = "image"
@@ -294,18 +300,30 @@ class MainWindow(QWidget):
             return
 
         refs = list(self.drop.paths)
-        card = WorkCard(placeholder=True, label=f"{self.model.label} 生成中…")
-        card.setToolTip(prompt)
-        self._insert_card(card, 0)
+        card = None
+        try:
+            card = WorkCard(placeholder=True, label=f"{self.model.label} 生成中…")
+            card.setToolTip(prompt)
+            self._insert_card(card, 0)
 
-        worker = falclient.GenerateWorker(
-            self.model, self.values, prompt, refs, key, self.out_dir)
-        worker.status.connect(lambda s, c=card: self._on_progress(c, s))
-        worker.done.connect(lambda paths, meta, c=card: self._on_done(c, paths, meta))
-        worker.failed.connect(lambda msg, c=card: self._on_failed(c, msg))
-        thread = falclient.start_worker(worker)
-        self._threads.append((thread, worker))
-        thread.finished.connect(lambda t=thread: self._reap(t))
+            worker = falclient.GenerateWorker(
+                self.model, self.values, prompt, refs, key, self.out_dir)
+            worker.status.connect(lambda s, c=card: self._on_progress(c, s))
+            worker.done.connect(lambda paths, meta, c=card: self._on_done(c, paths, meta))
+            worker.failed.connect(lambda msg, c=card: self._on_failed(c, msg))
+            thread = falclient.start_worker(worker)
+            self._threads.append((thread, worker))
+            thread.finished.connect(lambda t=thread: self._reap(t))
+        except Exception as e:               # noqa: BLE001
+            # 還沒送出就失敗（例如參考圖讀不到、執行緒開不起來）
+            if card is not None:
+                try:
+                    card.deleteLater()
+                except Exception:            # noqa: BLE001
+                    pass
+            self._report_error("無法開始生成", e)
+            self._set_busy(False)
+            return
 
         self._jobs += 1
         self._set_busy(True)
@@ -324,29 +342,63 @@ class MainWindow(QWidget):
             self.status.setText("")
 
     def _on_progress(self, card, text):
-        card.set_caption(text)
-        self.status.setText(text)
+        # 進度更新失敗無關緊要，吞掉就好，不要拖垮整個程式
+        try:
+            card.set_caption(text)
+            self.status.setText(text)
+        except RuntimeError:                 # 卡片已被刪除
+            pass
+        except Exception:                    # noqa: BLE001
+            pass
 
     def _on_done(self, card, paths, meta):
-        self._jobs = max(0, self._jobs - 1)
-        self._set_busy(False)
-        if not paths:
-            card.deleteLater()
-            return
-        card.promote(paths[0], meta)
-        self._wire_card(card)
-        for extra in paths[1:]:
-            c = WorkCard(extra, meta)
-            self._wire_card(c)
-            self._insert_card(c, 0)
-        self._refresh_count()
+        try:
+            if not paths:
+                card.deleteLater()
+                return
+            card.promote(paths[0], meta)
+            self._wire_card(card)
+            for extra in paths[1:]:
+                c = WorkCard(extra, meta)
+                self._wire_card(c)
+                self._insert_card(c, 0)
+            self._refresh_count()
+            if meta.get("partial_errors"):
+                self.status.setText(
+                    f"完成，但有 {len(meta['partial_errors'])} 張沒下載成功。")
+        except Exception as e:               # noqa: BLE001
+            # 圖已經存到硬碟了，只是畫面沒更新成功——告知使用者，不要關掉程式
+            self._report_error("顯示結果時發生錯誤", e,
+                               extra="檔案應該已經存進完成檔資料夾，可直接開啟資料夾查看。")
+        finally:
+            self._finish_job()
 
     def _on_failed(self, card, message):
-        self._jobs = max(0, self._jobs - 1)
-        self._set_busy(False)
-        card.fail(message)
-        self.status.setText(message)
-        QMessageBox.warning(self, "生成失敗", message)
+        try:
+            card.fail(message)
+            self.status.setText(message.splitlines()[0] if message else "生成失敗")
+            QMessageBox.warning(self, "生成失敗", message)
+        except Exception:                    # noqa: BLE001
+            pass
+        finally:
+            self._finish_job()
+
+    def _finish_job(self):
+        """不論成敗都要把計數與按鈕狀態收乾淨，否則按鈕會卡在「生成中…」。"""
+        try:
+            self._jobs = max(0, self._jobs - 1)
+            self._set_busy(False)
+        except Exception:                    # noqa: BLE001
+            pass
+
+    def _report_error(self, title, err, extra=""):
+        detail = f"{type(err).__name__}: {err}"
+        try:
+            self.status.setText(title)
+            QMessageBox.warning(self, title,
+                                detail + (f"\n\n{extra}" if extra else ""))
+        except Exception:                    # noqa: BLE001
+            pass
 
     # ---------------------------------------------------------- 作品牆操作
 
@@ -452,11 +504,56 @@ class MainWindow(QWidget):
         super().keyPressEvent(e)
 
 
+def _install_excepthook():
+    """
+    PySide6 對「槽函式裡沒接住的例外」預設是直接 abort 整個程式。
+    換上自己的 excepthook 後，PySide6 會改成呼叫它然後繼續跑事件迴圈，
+    程式就不會無聲無息地關掉。順手把 traceback 寫進 error.log（run.pyw 沒有主控台）。
+    """
+    log_file = config.ROOT / "error.log"
+    state = {"showing": False, "last": None}
+
+    def hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        try:
+            with open(log_file, "a", encoding="utf-8") as fh:
+                fh.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} =====\n{text}")
+        except OSError:
+            pass
+
+        # 同一個錯誤連續發生、或對話框還開著時就只記錄不再彈窗，避免洗版
+        signature = f"{exc_type.__name__}: {exc}"
+        if state["showing"] or signature == state["last"]:
+            return
+        state["showing"] = True
+        state["last"] = signature
+        try:
+            QMessageBox.warning(
+                None, "發生未預期的錯誤",
+                f"{signature}\n\n"
+                f"程式會繼續執行；詳細內容已寫入 {log_file.name}。")
+        except Exception:                    # noqa: BLE001
+            pass
+        finally:
+            state["showing"] = False
+
+    sys.excepthook = hook
+
+
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
-    win = MainWindow()
-    win.show()
+    _install_excepthook()
+    try:
+        win = MainWindow()
+        win.show()
+    except Exception as e:                   # noqa: BLE001
+        QMessageBox.critical(None, "啟動失敗", f"{type(e).__name__}: {e}\n\n"
+                                               f"{traceback.format_exc()[-1200:]}")
+        sys.exit(1)
     sys.exit(app.exec())
 
 

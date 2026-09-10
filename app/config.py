@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 MODELS_FILE = ROOT / "models.json"
 PRICING_FILE = ROOT / "pricing.json"
 ENV_FILE = ROOT / ".env"
-OUT_DIR = ROOT / "完成檔"
-REF_DIR = ROOT / "參考圖"
+OUT_DIR = ROOT / "finished_file"
+REF_DIR = ROOT / "referenced_image"
 META_DIR = OUT_DIR / ".meta"
 
 for d in (OUT_DIR, REF_DIR, META_DIR):

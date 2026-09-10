@@ -20,7 +20,7 @@ fal_image.py — 透過 FAL AI 平台生成/編輯圖片。
 
 預設：模型 nano-banana-2、比例 16:9、1 張。
 金鑰讀自 <專案>/.env 的 FAL_KEY（或環境變數 FAL_KEY）。
-參考圖預設從 <專案>/參考圖 讀取，成品寫到 <專案>/完成檔，
+參考圖預設從 <專案>/referenced_image 讀取，成品寫到 <專案>/finished_file，
 檔名為「模型名稱-年月日-時分.png」（同分鐘內第 2 張起加 -2、-3）。
 """
 
@@ -103,11 +103,11 @@ def data_uri(path: Path) -> str:
 
 def resolve_ref(name: str, project: Path) -> Path:
     p = Path(name)
-    candidates = [p, project / "參考圖" / p.name, project / p]
+    candidates = [p, project / "referenced_image" / p.name, project / p]
     for c in candidates:
         if c.is_file():
             return c
-    die(f"找不到參考圖 {name}（已找過 參考圖/ 資料夾）")
+    die(f"找不到參考圖 {name}（已找過 referenced_image/ 資料夾）")
 
 
 def http(url, key, payload=None):
@@ -206,12 +206,12 @@ def main():
     ap.add_argument("--prompt", required=True, help="提示詞")
     ap.add_argument("--model", default="nano-banana-2", choices=list(MODELS))
     ap.add_argument("--ref", nargs="*", default=[],
-                    help="參考圖檔名（預設從 參考圖/ 資料夾找）；給了就走 /edit 接口")
+                    help="參考圖檔名（預設從 referenced_image/ 資料夾找）；給了就走 /edit 接口")
     ap.add_argument("--aspect", default="16:9", help="寬高比，預設 16:9")
     ap.add_argument("--n", type=int, default=1, help="生成張數，預設 1")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--project", type=Path, default=Path(__file__).resolve().parent,
-                    help="專案資料夾（含 .env、參考圖、完成檔），預設為腳本所在目錄")
+                    help="專案資料夾（含 .env、referenced_image、finished_file），預設為腳本所在目錄")
     ap.add_argument("--outdir", type=Path, default=None, help="覆寫輸出資料夾")
     # nano-banana-2 專用
     ap.add_argument("--resolution", default="2K", choices=["0.5K", "1K", "2K", "4K"])
@@ -226,7 +226,7 @@ def main():
 
     project = args.project.resolve()
     key = load_key(project)
-    outdir = (args.outdir or project / "完成檔").resolve()
+    outdir = (args.outdir or project / "finished_file").resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
     mode = "edit" if args.ref else "text"

@@ -26,8 +26,8 @@ skill_genImage/
 ├── models.json       # 模型與參數設定（可自行增修）
 ├── pricing.json      # 成本估算價目表（可自行增修）
 ├── .env              # FAL_KEY
-├── 參考圖/            # 拖曳進來的參考圖會複製到這裡
-├── 完成檔/            # 成品；.meta/ 存每張作品的提示詞與設定
+├── referenced_image/ # 拖曳進來的參考圖會複製到這裡
+├── finished_file/    # 成品；.meta/ 存每張作品的提示詞與設定
 └── fal_image.py      # 命令列版本（仍可單獨使用）
 ```
 

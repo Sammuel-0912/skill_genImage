@@ -5,6 +5,7 @@ import base64
 import json
 import mimetypes
 import time
+import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -140,15 +141,31 @@ class GenerateWorker(QObject):
         self._cancelled = True
 
     def run(self):
+        """背景執行緒的進入點：絕不讓例外逃出去，否則整個程式會被帶走。"""
         try:
             paths, meta = self._run()
         except FalError as e:
-            self.failed.emit(str(e))
+            self._emit_failed(str(e))
+        except MemoryError:
+            self._emit_failed("記憶體不足。參考圖太大或張數太多，請調低後再試。")
         except Exception as e:                       # noqa: BLE001
-            self.failed.emit(f"{type(e).__name__}: {e}")
+            detail = traceback.format_exc()[-800:]
+            self._emit_failed(f"{type(e).__name__}: {e}\n\n{detail}")
+        except BaseException as e:                   # noqa: BLE001
+            self._emit_failed(f"執行緒中止：{type(e).__name__}: {e}")
         else:
-            if not self._cancelled:
-                self.done.emit(paths, meta)
+            try:
+                if not self._cancelled:
+                    self.done.emit(paths, meta)
+            except Exception as e:                   # noqa: BLE001
+                self._emit_failed(f"回傳結果時發生錯誤：{type(e).__name__}: {e}")
+
+    def _emit_failed(self, message: str):
+        """連發訊號本身都保護起來，確保執行緒一定收得了尾。"""
+        try:
+            self.failed.emit(message)
+        except Exception:                            # noqa: BLE001
+            pass
 
     # -------------------------------------------------------------- internal
 
@@ -217,7 +234,10 @@ class GenerateWorker(QObject):
 
         self.status.emit("下載中…")
         saved = []
+        errors = []
         for f in files:
+            if not isinstance(f, dict):
+                continue
             url = f.get("url")
             if not url:
                 continue
@@ -227,14 +247,29 @@ class GenerateWorker(QObject):
             else:
                 ct = f.get("content_type") or ""
                 ext = "mp4" if "video" in ct else (payload.get("output_format") or "png")
-            dest = next_path(self.out_dir, self.model.id, ext)
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=300) as r:
-                dest.write_bytes(r.read())
+            dest = None
+            try:
+                self.out_dir.mkdir(parents=True, exist_ok=True)
+                dest = next_path(self.out_dir, self.model.id, ext)
+                with urllib.request.urlopen(urllib.request.Request(url), timeout=300) as r:
+                    dest.write_bytes(r.read())
+            except Exception as e:                   # noqa: BLE001
+                # 單張失敗不影響其他張；沒寫完的殘檔清掉
+                if dest is not None and dest.exists():
+                    try:
+                        dest.unlink()
+                    except OSError:
+                        pass
+                errors.append(f"{type(e).__name__}: {e}")
+                continue
             write_meta(dest, meta)
             saved.append(dest)
 
         if not saved:
-            raise FalError("回傳的檔案沒有可下載的網址。")
+            reason = ("；".join(errors) if errors else "回傳的檔案沒有可下載的網址。")
+            raise FalError(f"下載失敗：{reason}")
+        if errors:
+            meta["partial_errors"] = errors
         return saved, meta
 
 
